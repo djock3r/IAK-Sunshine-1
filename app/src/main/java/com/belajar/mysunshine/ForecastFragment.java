@@ -1,8 +1,11 @@
 package com.belajar.mysunshine;
 
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
 import android.support.annotation.Nullable;
 import android.support.v4.app.Fragment;
 import android.text.format.Time;
@@ -13,6 +16,7 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 
@@ -56,7 +60,8 @@ public class ForecastFragment extends Fragment {
 
     @Override
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-        inflater.inflate(R.menu.forecastfragmentmenu, menu);
+        inflater.inflate(R.menu.fragmentmenu, menu);
+
     }
 
     @Override
@@ -64,11 +69,26 @@ public class ForecastFragment extends Fragment {
         int id = item.getItemId();
         if (id == R.id.action_refresh)
         {
-            FetchWeatherTask weatherTask = new FetchWeatherTask();
-            weatherTask.execute("94043");
+
             return  true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+
+    private void updateBos()
+    {
+        FetchWeatherTask weatherTask = new FetchWeatherTask();
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getActivity());
+        String location = prefs.getString(getString(R.string.pref_location_key),
+                getString(R.string.pref_location_default));
+        weatherTask.execute(location);
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        updateBos();
     }
 
     @Override
@@ -86,11 +106,23 @@ public class ForecastFragment extends Fragment {
             getActivity(),
                 R.layout.list_item_forecast,
                 R.id.list_item_forecast_textview,
-                weekForecast
+                new ArrayList<String >()
         );
 
      ListView listview = (ListView) rootView.findViewById(R.id.listview_forecast);
     listview.setAdapter(mForescastAdapter);
+
+        listview.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
+                String forecast = mForescastAdapter.getItem(i);
+
+
+                            Intent intent = new Intent(getActivity(), DetailActivity.class)
+                                          .putExtra(Intent.EXTRA_TEXT, forecast);
+                         startActivity(intent);
+            }
+        });
 
                // Inflate the layout for this fragment
         return rootView;
@@ -126,8 +158,16 @@ public class ForecastFragment extends Fragment {
         /**
          * Prepare the weather high/lows for presentation.
          */
-        private String formatHighLows(double high, double low) {
-// For presentation, assume the user doesn't care about tenths of a degree.
+        private String formatHighLows(double high, double low, String unitType) {
+
+            if (unitType.equals(getString(R.string.pref_units_imperial))) {
+                high = (high * 1.8) + 32;
+                low = (low * 1.8) + 32;
+            } else if (!unitType.equals(getString(R.string.pref_units_metric))) {
+                Log.d(LOG_TAG, "Unit type not found: " +  unitType);
+            }
+
+            // For presentation, assume the user doesn't care about tenths of a degree.
             long roundedHigh = Math.round(high);
             long roundedLow = Math.round(low);
 
@@ -156,32 +196,44 @@ public class ForecastFragment extends Fragment {
                     JSONObject forecastJson = new JSONObject(forecastJsonStr);
             JSONArray weatherArray = forecastJson.getJSONArray(OWM_LIST);
 
-// OWM returns daily forecasts based upon the local time of the city that is being
-// asked for, which means that we need to know the GMT offset to translate this data
-// properly.
+                // OWM returns daily forecasts based upon the local time of the city that is being
+                // asked for, which means that we need to know the GMT offset to translate this data
+                // properly.
 
-// Since this data is also sent in-order and the first day is always the
-// current day, we're going to take advantage of that to get a nice
-// normalized UTC date for all of our weather.
+                // Since this data is also sent in-order and the first day is always the
+                // current day, we're going to take advantage of that to get a nice
+                // normalized UTC date for all of our weather.
 
-                                    Time dayTime = new Time();
+             Time dayTime = new Time();
             dayTime.setToNow();
 
 // we start at the day returned by local time. Otherwise this is a mess.
             int julianStartDay = Time.getJulianDay(System.currentTimeMillis(), dayTime.gmtoff);
 
 // now we work exclusively in UTC
-                    dayTime = new Time();
+            dayTime = new Time();
 
-                    String[] resultStrs = new String[numDays];
+            String[] resultStrs = new String[numDays];
+
+            // Data is fetched in Celsius by default.
+            // If user prefers to see in Fahrenheit, convert the values here.
+            // We do this rather than fetching in Fahrenheit so that the user can
+            // change this option without us having to re-fetch the data once
+            // we start storing the values in a database.
+            SharedPreferences sharedPrefs =
+                    PreferenceManager.getDefaultSharedPreferences(getActivity());
+            String unitType = sharedPrefs.getString(
+                    getString(R.string.pref_units_key),
+                    getString(R.string.pref_units_metric));
+
             for(int i = 0; i < weatherArray.length(); i++) {
                 // For now, using the format "Day, description, hi/low"
                 String day;
                 String description;
                 String highAndLow;
 
-                        // Get the JSON object representing the day
-                        JSONObject dayForecast = weatherArray.getJSONObject(i);
+                // Get the JSON object representing the day
+                JSONObject dayForecast = weatherArray.getJSONObject(i);
 
                 // The date/time is returned as a long.  We need to convert that
                 // into something human-readable, since most people won't read "1400356800" as
@@ -191,21 +243,19 @@ public class ForecastFragment extends Fragment {
                 dateTime = dayTime.setJulianDay(julianStartDay+i);
                 day = getReadableDateString(dateTime);
 
-                        // description is in a child array called "weather", which is 1 element long.
-                        JSONObject weatherObject = dayForecast.getJSONArray(OWM_WEATHER).getJSONObject(0);
+                // description is in a child array called "weather", which is 1 element long.
+                JSONObject weatherObject = dayForecast.getJSONArray(OWM_WEATHER).getJSONObject(0);
                 description = weatherObject.getString(OWM_DESCRIPTION);
 
-                        // Temperatures are in a child object called "temp".  Try not to name variables
-                        // "temp" when working with temperature.  It confuses everybody.
-                        JSONObject temperatureObject = dayForecast.getJSONObject(OWM_TEMPERATURE);
+                // Temperatures are in a child object called "temp".  Try not to name variables
+                // "temp" when working with temperature.  It confuses everybody.
+                JSONObject temperatureObject = dayForecast.getJSONObject(OWM_TEMPERATURE);
                 double high = temperatureObject.getDouble(OWM_MAX);
                 double low = temperatureObject.getDouble(OWM_MIN);
 
-                        highAndLow = formatHighLows(high, low);
+                highAndLow = formatHighLows(high, low, unitType);
                 resultStrs[i] = day + " - " + description + " - " + highAndLow;
             }
-
-
             return resultStrs;
 
         }
